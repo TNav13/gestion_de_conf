@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: jitsi
+  namespace: argocd
+spec:
+  project: default
+  sources:
+  - repoURL: 'https://github.com/TNav13/gestion_de_conf.git'
+    targetRevision: main 
+    path: helm/jitsi-meet
+    helm:
+      valueFiles:
+        - values-aws.yaml 
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: jitsi
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true  # Crée le namespace si absent
+    automated:
+      prune: true
+      selfHeal: true

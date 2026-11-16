@@ -1,0 +1,25 @@
+publicURL: "https://jitsi-nlb-7f622dcb02c61e59.elb.eu-north-1.amazonaws.com"
+
+web:
+  service:
+    type: NodePort
+    nodePort: 30080
+  extraEnvs:
+    ENABLE_P2P: "false"
+
+jvb:
+  publicIPs:
+    - 13.61.44.217
+    - 56.228.114.188
+    - 13.51.59.110
+  disableStun: true
+  UDPPort: 30300
+  nodePort: 30300
+  service:
+    type: NodePort
+    externalTrafficPolicy: Local
+    extraPorts:
+      - name: http-healthcheck
+        port: 8080
+        protocol: TCP
+        nodePort: 30808
