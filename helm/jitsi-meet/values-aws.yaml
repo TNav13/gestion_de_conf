@@ -1,5 +1,11 @@
 publicURL: "https://jitsi-nlb-54d78af2f78372fe.elb.eu-north-1.amazonaws.com"
-
+enableAuth: true
+enableGuests: true
+prosody:
+  persistence:
+    enabled: true
+  storageClassName: gp2
+  
 web:
   service:
     type: NodePort
@@ -28,3 +34,4 @@ jvb:
 jicofo:
   xmpp:
     existingSecretName: jitsi-jicofo-bao
+  
