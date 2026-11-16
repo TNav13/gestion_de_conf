@@ -1,4 +1,4 @@
-publicURL: "https://jitsi-nlb-7f622dcb02c61e59.elb.eu-north-1.amazonaws.com"
+publicURL: "https://jitsi-nlb-54d78af2f78372fe.elb.eu-north-1.amazonaws.com"
 
 web:
   service:
@@ -9,9 +9,9 @@ web:
 
 jvb:
   publicIPs:
-    - 13.61.44.217
-    - 56.228.114.188
-    - 13.51.59.110
+    - 16.192.233.43
+    - 13.61.53.126
+    - 13.63.251.51
   disableStun: true
   UDPPort: 30300
   nodePort: 30300
