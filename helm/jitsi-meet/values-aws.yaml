@@ -24,7 +24,7 @@ jvb:
         protocol: TCP
         nodePort: 30808
   xmpp:
-    existingSecretName: jitsi-jicofo-boa
+    existingSecretName: jitsi-jvb-bao
 jicofo:
   xmpp:
-    existingSecretName: jitsi-jvb-bao
+    existingSecretName: jitsi-jicofo-bao
