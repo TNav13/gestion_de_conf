@@ -1,0 +1,5 @@
+jvb:
+  publicIPs:
+  - "1.2.3.4"
+  - "5.6.7.8"
+publicURL: "https://jitsi-nlb-xxx.elb.eu-north-1.amazonaws.com"

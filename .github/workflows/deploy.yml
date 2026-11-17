@@ -1,0 +1,87 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    # Les changements d'apps (helm/, argocd/) sont appliqués par ArgoCD, pas par la CI
+    paths:
+      - terraform_infra/**
+      - scripts/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+# Jamais deux Terraform en même temps : deploy et destroy partagent ce groupe
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # connexion à AWS par OIDC
+  contents: write # commit de values-infra.yaml
+
+env:
+  AWS_REGION: eu-north-1
+
+jobs:
+  # Analyse statique du Terraform, des manifestes Kubernetes et des workflows
+  checkov:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: bridgecrewio/checkov-action@v12.1347.0
+        with:
+          directory: .
+          framework: terraform,kubernetes,github_actions
+          # Rapport seulement : passer à false pour bloquer le déploiement sur un échec
+          soft_fail: true
+          quiet: true
+
+  deploy:
+    needs: checkov
+    runs-on: ubuntu-latest
+    # La session AWS du rôle dure 1 h
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DEPLOY_EKS }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.14.5
+          # Sans le wrapper, `terraform output -raw` n'écrit que la valeur
+          terraform_wrapper: false
+
+      - name: Terraform apply
+        working-directory: terraform_infra
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve
+
+      - name: values-infra.yaml depuis terraform output
+        run: |
+          terraform -chdir=terraform_infra output -raw jitsi_values > helm/jitsi-meet/values-infra.yaml
+          git add helm/jitsi-meet/values-infra.yaml
+          if git diff --cached --quiet; then
+            echo "values-infra.yaml inchangé"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: values-infra.yaml depuis terraform output"
+          # Au cas où un commit serait arrivé sur main pendant l'apply
+          git pull --rebase
+          # Poussé avec GITHUB_TOKEN : ne relance pas ce workflow
+          git push
+
+      - name: Accès au cluster
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$(terraform -chdir=terraform_infra output -raw cluster_name)"
+
+      - name: Bootstrap OpenBao
+        run: ./scripts/bootstrap-openbao.sh

@@ -1,0 +1,17 @@
+# Clés et secrets
+*.pem
+**/secrets.env
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+
+.DS_Store
+
+# Généré par terraform apply (adresses du NLB)
+**/public.env
+
+jitsi-kustomize/

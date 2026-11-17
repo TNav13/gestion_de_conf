@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: openbao
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: openbao
+    repoURL: https://openbao.github.io/openbao-helm
+    targetRevision: 0.30.7
+    helm:
+      releaseName: openbao
+      valuesObject:
+        injector:
+          enabled: false
+        server:
+          dataStorage:
+            storageClass: gp2
+            size: 5Gi
+          # Donne au pod le rôle IAM (IRSA) qui a le droit d'utiliser la clé KMS
+          serviceAccount:
+            annotations:
+              eks.amazonaws.com/role-arn: "arn:aws:iam::351458008228:role/openbao-unseal"
+          # Remplace toute la config par défaut du chart : ui, listener et storage
+          # en sont recopiés, seul le bloc seal est ajouté (auto-unseal KMS)
+          standalone:
+            config: |
+              ui = true
+
+              listener "tcp" {
+                tls_disable = 1
+                address = "[::]:8200"
+                cluster_address = "[::]:8201"
+              }
+              storage "pebbledb" {
+                path = "/openbao/data/pebbledb"
+              }
+
+              seal "awskms" {
+                region     = "eu-north-1"
+                kms_key_id = "alias/openbao-unseal"
+              }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openbao
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: true
+      selfHeal: true

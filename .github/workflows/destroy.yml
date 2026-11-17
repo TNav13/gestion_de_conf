@@ -1,0 +1,59 @@
+name: destroy
+
+on:
+  workflow_dispatch:
+    # checkov:skip=CKV_GHA_7:Saisie de confirmation voulue, elle ne modifie pas ce qui est déployé
+    inputs:
+      confirm:
+        description: 'Tape "destroy" pour tout supprimer'
+        required: true
+
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+
+jobs:
+  destroy:
+    if: inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DEPLOY_EKS }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - name: Terraform destroy
+        working-directory: terraform_infra
+        run: |
+          terraform init -input=false
+          # Noté avant le destroy : sert ensuite à retrouver les volumes du cluster
+          echo "CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || true)" >> "$GITHUB_ENV"
+          terraform destroy -input=false -auto-approve
+
+      # Les disques des PVC (openbao, prosody) sont créés par Kubernetes, pas par
+      # Terraform : ils survivent au cluster et restent facturés
+      - name: Suppression des volumes EBS orphelins
+        if: env.CLUSTER_NAME != ''
+        run: |
+          ids=$(aws ec2 describe-volumes \
+            --filters "Name=tag:ebs.csi.aws.com/cluster-name,Values=$CLUSTER_NAME" Name=status,Values=available \
+            --query 'Volumes[].VolumeId' --output text)
+          for id in $ids; do
+            echo "suppression de $id"
+            aws ec2 delete-volume --volume-id "$id"
+          done

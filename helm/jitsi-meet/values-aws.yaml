@@ -1,6 +1,5 @@
-publicURL: "https://jitsi-nlb-54d78af2f78372fe.elb.eu-north-1.amazonaws.com"
-enableAuth: true
-enableGuests: true
+enableAuth: false
+enableGuests: false
 prosody:
   persistence:
     enabled: true
@@ -14,10 +13,6 @@ web:
     ENABLE_P2P: "false"
 
 jvb:
-  publicIPs:
-    - 16.192.233.43
-    - 13.61.53.126
-    - 13.63.251.51
   disableStun: true
   UDPPort: 30300
   nodePort: 30300
