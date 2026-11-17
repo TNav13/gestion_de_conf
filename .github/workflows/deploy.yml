@@ -31,13 +31,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: bridgecrewio/checkov-action@v12.1347.0
+      # Pas checkov-action : sa dernière release embarque checkov 2.0 (2022)
+      - uses: actions/setup-python@v7
         with:
-          directory: .
-          framework: terraform,kubernetes,github_actions
-          # Rapport seulement : passer à false pour bloquer le déploiement sur un échec
-          soft_fail: true
-          quiet: true
+          python-version: "3.13"
+
+      - name: Checkov
+        run: |
+          pip install checkov==3.4.5
+          # --soft-fail : rapport seulement, l'enlever pour bloquer le déploiement sur un échec
+          checkov -d . --framework terraform kubernetes github_actions --soft-fail --quiet --compact
 
   deploy:
     needs: checkov
