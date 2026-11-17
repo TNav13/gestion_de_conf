@@ -15,6 +15,7 @@ concurrency:
 permissions:
   id-token: write
   contents: read
+  actions: read # lecture de l'artifact de state
 
 env:
   AWS_REGION: eu-north-1
@@ -37,6 +38,13 @@ jobs:
           terraform_version: 1.14.5
           terraform_wrapper: false
 
+      - name: Récupération du state (artifact chiffré)
+        id: pull
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: ./scripts/tfstate.sh pull
+
       - name: Terraform destroy
         working-directory: terraform_infra
         run: |
@@ -44,6 +52,23 @@ jobs:
           # Noté avant le destroy : sert ensuite à retrouver les volumes du cluster
           echo "CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || true)" >> "$GITHUB_ENV"
           terraform destroy -input=false -auto-approve
+
+      # State vidé (ou partiel si le destroy échoue) : le prochain deploy repart de là
+      - name: Chiffrement du state
+        if: always() && steps.pull.outcome == 'success' && hashFiles('terraform_infra/terraform.tfstate') != ''
+        env:
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: ./scripts/tfstate.sh encrypt
+
+      - name: Sauvegarde du state
+        if: always() && steps.pull.outcome == 'success' && hashFiles('terraform_infra/terraform.tfstate') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfstate
+          path: ${{ runner.temp }}/tfstate/terraform.tfstate.enc
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
 
       # Les disques des PVC (openbao, prosody) sont créés par Kubernetes, pas par
       # Terraform : ils survivent au cluster et restent facturés

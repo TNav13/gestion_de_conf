@@ -18,6 +18,7 @@ concurrency:
 permissions:
   id-token: write # connexion à AWS par OIDC
   contents: write # commit de values-infra.yaml
+  actions: read # lecture de l'artifact de state des runs précédents
 
 env:
   AWS_REGION: eu-north-1
@@ -61,11 +62,36 @@ jobs:
           # Sans le wrapper, `terraform output -raw` n'écrit que la valeur
           terraform_wrapper: false
 
+      - name: Récupération du state (artifact chiffré)
+        id: pull
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: ./scripts/tfstate.sh pull
+
       - name: Terraform apply
         working-directory: terraform_infra
         run: |
           terraform init -input=false
           terraform apply -input=false -auto-approve
+
+      # Même si l'apply échoue : ce qui a déjà été créé doit rester connu du state.
+      # Jamais si la récupération a échoué, pour ne pas écraser le bon state
+      - name: Chiffrement du state
+        if: always() && steps.pull.outcome == 'success' && hashFiles('terraform_infra/terraform.tfstate') != ''
+        env:
+          TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
+        run: ./scripts/tfstate.sh encrypt
+
+      - name: Sauvegarde du state
+        if: always() && steps.pull.outcome == 'success' && hashFiles('terraform_infra/terraform.tfstate') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfstate
+          path: ${{ runner.temp }}/tfstate/terraform.tfstate.enc
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
 
       - name: values-infra.yaml depuis terraform output
         run: |
@@ -78,8 +104,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "ci: values-infra.yaml depuis terraform output"
-          # Au cas où un commit serait arrivé sur main pendant l'apply
-          git pull --rebase
+          # Au cas où un commit serait arrivé sur main pendant l'apply.
+          # --autostash : terraform init a modifié .terraform.lock.hcl (empreintes Linux)
+          git pull --rebase --autostash
           # Poussé avec GITHUB_TOKEN : ne relance pas ce workflow
           git push
 
