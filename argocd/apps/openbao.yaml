@@ -8,7 +8,9 @@ spec:
   source:
     chart: openbao
     repoURL: https://openbao.github.io/openbao-helm
-    targetRevision: 0.30.7
+    # 0.29.x = OpenBao 2.6 : à partir de 2.7 (chart 0.30), le seal awskms
+    # n'est plus intégré et devient un plugin à installer à part
+    targetRevision: 0.29.6
     helm:
       releaseName: openbao
       valuesObject:
@@ -33,8 +35,9 @@ spec:
                 address = "[::]:8200"
                 cluster_address = "[::]:8201"
               }
-              storage "pebbledb" {
-                path = "/openbao/data/pebbledb"
+              # Stockage par défaut du chart 0.29 (pebbledb n'existe qu'en 2.7)
+              storage "file" {
+                path = "/openbao/data"
               }
 
               seal "awskms" {
