@@ -36,5 +36,8 @@ output "jitsi_values" {
   value = yamlencode({
     publicURL = "https://${aws_lb.jitsi.dns_name}"
     jvb       = { publicIPs = aws_eip.jitsi_lb[*].public_ip }
+    # Le chart ne redémarre pas les pods quand PUBLIC_URL change (pas de checksum
+    # sur sa ConfigMap commune) : cette annotation change avec l'URL et force le redémarrage
+    global = { podAnnotations = { "jitsi/public-url" = "https://${aws_lb.jitsi.dns_name}" } }
   })
 }
