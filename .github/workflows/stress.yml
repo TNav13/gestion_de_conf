@@ -43,7 +43,7 @@ jobs:
           docker network create stress
           # 1 participant = 1 session Chrome ; /dev/shm agrandi sinon Chrome plante
           docker run -d --name selenium-grid --network stress -p 4444:4444 --shm-size=4g \
-            -e SE_NODE_MAX_SESSIONS=10 -e SE_NODE_OVERRIDE_MAX_SESSIONS=true \
+            -e SE_NODE_MAX_SESSIONS=5 -e SE_NODE_OVERRIDE_MAX_SESSIONS=true \
             grid
           timeout 120 sh -c 'until curl -sf localhost:4444/status | jq -e .value.ready >/dev/null; do sleep 2; done'
 
@@ -52,9 +52,9 @@ jobs:
         run: |
           docker run --rm --network stress malleus \
             --conferences=1 \
-            --participants=10 \
-            --senders=2 \
-            --audio-senders=2 \
+            --participants=5 \
+            --senders=5 \
+            --audio-senders=5 \
             --duration=300 \
             --room-name-prefix=bench \
             --hub-url=http://selenium-grid:4444/wd/hub \
