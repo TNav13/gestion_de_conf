@@ -11,8 +11,9 @@ spec:
     path: helm/jitsi-meet
     helm:
       valueFiles:
-        - values-aws.yaml
-        # Généré par la CI (terraform output) : en dernier pour primer sur values-aws
+        # Les réglages du projet, rangés hors du chart officiel
+        - ../values/jitsi-meet-aws.yaml
+        # Généré par la CI (terraform output) : en dernier pour primer sur jitsi-meet-aws
         - values-infra.yaml
   destination:
     server: https://kubernetes.default.svc

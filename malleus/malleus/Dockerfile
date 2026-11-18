@@ -7,7 +7,7 @@ ADD https://github.com/jitsi/jitsi-meet-torture.git#4c00915e97006ff2224bb509eb35
 WORKDIR /torture
 
 # Avec ce paramètre d'URL, Jitsi fait entrer les participants sans micro ni caméra
-# (la page de pré-connexion est désactivée côté serveur : ENABLE_PREJOIN_PAGE dans values-aws.yaml)
+# (la page de pré-connexion est désactivée côté serveur : ENABLE_PREJOIN_PAGE dans helm/values/jitsi-meet-aws.yaml)
 RUN sed -i '/config.prejoinConfig.enabled=false/d' src/test/java/org/jitsi/meet/test/web/WebParticipant.java \
  && ! grep -q prejoinConfig src/test/java/org/jitsi/meet/test/web/WebParticipant.java
 
