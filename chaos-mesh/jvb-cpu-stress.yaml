@@ -1,0 +1,17 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: jvb-cpu-stress
+  namespace: jitsi
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - jitsi
+    labelSelectors:
+      app.kubernetes.io/component: jvb
+  stressors:
+    cpu:
+      workers: 2
+      load: 100
+  duration: 2m

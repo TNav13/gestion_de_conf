@@ -1,0 +1,18 @@
+kind: HTTPChaos
+apiVersion: chaos-mesh.org/v1alpha1
+metadata:
+  namespace: jitsi
+  name: chaos-http-abort
+spec:
+  selector:
+    namespaces:
+      - jitsi
+    labelSelectors:
+      app.kubernetes.io/component: web
+  mode: all
+  target: Request
+  abort: true
+  port: 8000
+  path: /http-bind
+  method: GET
+  duration: 20s

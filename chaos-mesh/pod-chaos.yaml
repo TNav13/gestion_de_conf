@@ -1,0 +1,15 @@
+kind: PodChaos
+apiVersion: chaos-mesh.org/v1alpha1
+metadata:
+  namespace: jitsi
+  name: pod-unavailable
+spec:
+  selector:
+    namespaces:
+      - jitsi
+    labelSelectors:
+      app.kubernetes.io/component: web
+      app.kubernetes.io/component: jvb
+  mode: all
+  action: pod-failure
+  duration: 30s
