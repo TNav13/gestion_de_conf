@@ -1,0 +1,63 @@
+name: stress
+
+# Test de charge Malleus (jitsi-meet-torture) contre le Jitsi déployé
+on:
+  schedule:
+    - cron: "0 12 * * *"
+      timezone: Europe/Paris
+  workflow_dispatch:
+
+# Deux runs en même temps rejoindraient la même salle (même préfixe de nom)
+concurrency:
+  group: stress
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  malleus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # URL écrite par le workflow deploy. Après un destroy le fichier garde l'ancienne
+      # URL : on vérifie qu'elle répond pour échouer tout de suite
+      - name: URL de Jitsi
+        run: |
+          url=$(yq '.publicURL' helm/jitsi-meet/values-infra.yaml)
+          # -k : certificat autosigné
+          curl -skf --max-time 10 -o /dev/null "$url" \
+            || { echo "::error::Jitsi ne répond pas sur $url : infra détruite ou pas encore déployée ?"; exit 1; }
+          echo "JITSI_URL=$url" >> "$GITHUB_ENV"
+
+      # shortcut: images reconstruites à chaque run (quelques minutes), les publier sur GHCR si ça devient trop long
+      - name: Build des images
+        run: |
+          docker build -t grid malleus/grid
+          docker build -t malleus malleus/malleus
+
+      - name: Grid Selenium
+        run: |
+          docker network create stress
+          # 1 participant = 1 session Chrome ; /dev/shm agrandi sinon Chrome plante
+          docker run -d --name selenium-grid --network stress -p 4444:4444 --shm-size=4g \
+            -e SE_NODE_MAX_SESSIONS=10 -e SE_NODE_OVERRIDE_MAX_SESSIONS=true \
+            grid
+          timeout 120 sh -c 'until curl -sf localhost:4444/status | jq -e .value.ready >/dev/null; do sleep 2; done'
+
+      # --allow-insecure-certs : certificat autosigné du NLB
+      - name: Malleus
+        run: |
+          docker run --rm --network stress malleus \
+            --conferences=1 \
+            --participants=10 \
+            --senders=2 \
+            --audio-senders=2 \
+            --duration=300 \
+            --room-name-prefix=bench \
+            --hub-url=http://selenium-grid:4444/wd/hub \
+            --instance-url="$JITSI_URL" \
+            --allow-insecure-certs=true \
+            --headless
