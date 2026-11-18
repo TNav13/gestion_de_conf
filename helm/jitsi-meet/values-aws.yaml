@@ -11,6 +11,9 @@ web:
     nodePort: 30080
   extraEnvs:
     ENABLE_P2P: "false"
+    # Torture (stress test) passe config.prejoinConfig.enabled=false dans l'URL, ce que
+    # Jitsi traite comme « entrer sans média ». Sans page de pré-connexion, plus besoin de ce paramètre
+    ENABLE_PREJOIN_PAGE: "false"
 
 jvb:
   disableStun: true
@@ -27,6 +30,10 @@ jvb:
   xmpp:
     existingSecretName: jitsi-jvb-bao
 jicofo:
+  # Deux jicofo en même temps se volent la session XMPP « focus » : celui éjecté ne
+  # se reconnecte jamais et plus aucune conférence ne démarre
+  strategy:
+    type: Recreate
   xmpp:
     existingSecretName: jitsi-jicofo-bao
   
