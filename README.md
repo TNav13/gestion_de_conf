@@ -8,14 +8,15 @@ Déploiement de la visioconférence Jitsi Meet sur AWS, entièrement automatisé
 - un **stress test** (Malleus, de jitsi-meet-torture) fait entrer chaque jour à 12h de vrais navigateurs dans une réunion (partie 10) ;
 - **Chaos Mesh** injecte des pannes (pod tué, CPU saturé, requêtes coupées) pour voir comment Jitsi s'en remet (partie 11).
 
-Aucune commande manuelle après la mise en place initiale (partie 8), sauf pour lancer les expériences de Chaos Mesh.
+Aucune commande manuelle après la mise en place initiale (partie 8) : même les expériences de Chaos Mesh se lancent depuis GitHub Actions (workflow `chaos`).
 
 ```
 .
 ├── .github/workflows/
 │   ├── deploy.yml                checkov, terraform apply, values-infra, bootstrap OpenBao
 │   ├── destroy.yml               terraform destroy + volumes EBS orphelins (lancé à la main)
-│   └── stress.yml                stress test Malleus (chaque jour à 12h, ou à la main)
+│   ├── stress.yml                stress test Malleus (chaque jour à 12h, ou à la main)
+│   └── chaos.yml                 injecte une expérience Chaos Mesh au choix (à la main)
 ├── scripts/
 │   ├── tfstate.sh                state Terraform ↔ artifact GitHub chiffré
 │   └── bootstrap-openbao.sh      init et configuration d'OpenBao
@@ -474,7 +475,7 @@ Ouvre ensuite l'URL `publicURL` de `helm/jitsi-meet/values-infra.yaml` et accept
 
 ### Tout supprimer
 
-GitHub → Actions → **destroy** → Run workflow, puis taper `destroy` pour confirmer. Le workflow récupère le state, lance `terraform destroy`, sauvegarde le state vidé (le prochain deploy repart de zéro), puis supprime les volumes EBS laissés par les disques de prosody et d'OpenBao : créés par Kubernetes et pas par Terraform, ils survivraient au cluster et resteraient facturés. Les clés KMS ne disparaissent pas tout de suite : AWS impose une attente de 7 jours minimum.
+GitHub → Actions → **destroy** → Run workflow, puis taper `destroy` pour confirmer. Le workflow récupère le state, lance `terraform destroy`, sauvegarde le state vidé (le prochain deploy repart de zéro), puis supprime les volumes EBS laissés par les disques de prosody et d'OpenBao : créés par Kubernetes et pas par Terraform, ils survivraient au cluster et resteraient facturés. Il attend d'abord que chaque disque soit détaché, au cas où un nœud finirait de s'arrêter. Le nom du cluster, noté avant le destroy, passe d'une étape à l'autre par une sortie d'étape (`$GITHUB_OUTPUT`). Les clés KMS ne disparaissent pas tout de suite : AWS impose une attente de 7 jours minimum.
 
 ### Pièges rencontrés
 
@@ -540,7 +541,7 @@ Les fichiers de test sont dans l'image **grid**, pas dans malleus : c'est Chrome
 
 ### Le workflow `.github/workflows/stress.yml`
 
-Lancé chaque jour à 12h, heure de Paris (`timezone: Europe/Paris`), ou à la main (Actions → stress → Run workflow). Il n'a besoin d'aucun accès à AWS.
+Lancé chaque jour à 12h, heure de Paris (`timezone: Europe/Paris`), ou à la main (Actions → stress → Run workflow). Il n'a besoin d'aucun accès à AWS. Pour tester une panne pendant le test, on lance à côté le workflow `chaos` (partie 11).
 
 1. Lit `publicURL` dans `helm/jitsi-meet/values-infra.yaml` et vérifie que Jitsi répond. Après un `destroy`, le fichier garde l'ancienne URL : le job échoue tout de suite, en rouge.
 2. Construit les deux images sur le runner (environ 2 minutes).
@@ -615,7 +616,19 @@ Supprimer les pods plutôt que faire un `rollout restart` : l'annotation que ce 
 
 ### Les expériences : `chaos-mesh/`
 
-Ce dossier est en dehors de `argocd/apps/` : ArgoCD n'y touche jamais, et une expérience ne tourne que quand on la lance. De préférence pendant un run du stress test :
+Ce dossier est en dehors de `argocd/apps/` : ArgoCD n'y touche jamais, et une expérience ne tourne que quand on la lance.
+
+**Avec le workflow `.github/workflows/chaos.yml`** (le plus simple) : Actions → chaos → Run workflow, puis choisir l'expérience (le nom du fichier sans `.yaml`). Il est séparé du stress test : on lance d'abord **stress**, puis **chaos** une fois les participants entrés (environ 3 minutes après le début du stress, build compris). Le job :
+
+1. se connecte au cluster avec le rôle `deploy_eks` (OIDC, comme deploy) ;
+2. supprime l'expérience si elle existe déjà (le webhook de Chaos Mesh refuse de la modifier), puis l'applique ;
+3. échoue avec la raison si elle n'est pas injectée dans la minute (par exemple les certificats, plus haut) ;
+4. affiche les stats du jvb toutes les 10 s (participants, flux vidéo, débits, `stress_level`) jusqu'à la fin de l'expérience, puis 20 s après ;
+5. supprime l'expérience, même si le suivi a échoué.
+
+Le résultat se lit à deux endroits : le run **stress** est vert si les 5 participants ont tenu malgré la panne, et les stats du run **chaos** montrent ce que la panne a coupé, et combien de temps.
+
+**À la main**, pendant un run du stress test :
 
 ```bash
 kubectl apply -f chaos-mesh/jvb-cpu-stress.yaml

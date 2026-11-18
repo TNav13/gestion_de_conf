@@ -1,0 +1,92 @@
+name: chaos
+
+# Injecte une expérience de chaos-mesh/ dans le cluster et suit le jvb pendant qu'elle tourne.
+# À lancer pendant un run du workflow stress pour voir comment Jitsi tient
+on:
+  workflow_dispatch:
+    # checkov:skip=CKV_GHA_7:Choix de l'expérience, il ne modifie pas ce qui est déployé
+    inputs:
+      experience:
+        description: Expérience à injecter (fichier de chaos-mesh/)
+        type: choice
+        options:
+          - pod-chaos
+          - jvb-cpu-stress
+          - http-chaos-abort
+
+# Une seule expérience à la fois : deux pannes mélangées ne diraient rien
+concurrency:
+  group: chaos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # connexion à AWS par OIDC
+
+env:
+  AWS_REGION: eu-north-1
+  FICHIER: chaos-mesh/${{ inputs.experience }}.yaml
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DEPLOY_EKS }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Accès au cluster
+        id: acces
+        run: |
+          cluster=$(aws eks list-clusters --query "clusters[?starts_with(@, 'gestion_conf-eks-')] | [0]" --output text)
+          [ "$cluster" != None ] || { echo "::error::aucun cluster : infra détruite ?"; exit 1; }
+          aws eks update-kubeconfig --name "$cluster"
+
+      - name: Injection et suivi du jvb
+        run: |
+          cond() {
+            kubectl get -f "$FICHIER" -o json | jq -r --arg t "$1" '[.status.conditions[]? | select(.type == $t) | .status][0] // ""'
+          }
+          stats() {
+            s=$(kubectl -n jitsi exec deploy/jitsi-jitsi-meet-jvb-0 -- curl -s localhost:8080/colibri/stats 2>/dev/null) \
+              && echo "$s" | jq -c --arg h "$(date +%T)" '{heure: $h, conferences, participants, video: .endpoints_sending_video, recu_kbps: .bit_rate_download, envoye_kbps: .bit_rate_upload, stress_level}' \
+              || echo "$(date +%T) jvb injoignable"
+          }
+
+          echo "== avant"
+          stats
+          # Une expérience déjà présente ne se relance pas : le webhook refuse de la modifier
+          kubectl delete -f "$FICHIER" --ignore-not-found
+          kubectl apply -f "$FICHIER"
+
+          # Si le contrôleur ne joint pas les daemons (certificats incohérents, partie 11 du
+          # README), l'expérience reste « Not Injected » : on échoue avec la raison
+          for _ in $(seq 12); do
+            [ "$(cond AllInjected)" = True ] && break
+            sleep 5
+          done
+          if [ "$(cond AllInjected)" != True ]; then
+            kubectl get -f "$FICHIER" -o json \
+              | jq -r '.status.experiment.containerRecords[]? | "\(.id) : \(.phase) \(.events[-1].message // "")"'
+            echo "::error::expérience non injectée"
+            exit 1
+          fi
+          echo "== injectée à $(date +%T)"
+
+          # Toutes les expériences de chaos-mesh/ ont une durée : Chaos Mesh les retire tout seul
+          until [ "$(cond AllRecovered)" = True ]; do
+            stats
+            sleep 10
+          done
+          echo "== terminée à $(date +%T)"
+          sleep 20
+          stats
+
+      # Même si le suivi échoue : sinon l'expérience ne pourrait pas être relancée
+      - name: Nettoyage
+        if: always() && steps.acces.outcome == 'success'
+        run: kubectl delete -f "$FICHIER" --ignore-not-found
