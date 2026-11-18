@@ -3,16 +3,19 @@
 Déploiement de la visioconférence Jitsi Meet sur AWS, entièrement automatisé :
 - **GitHub Actions** lance tout à chaque push : analyse Checkov, Terraform, puis la configuration d'OpenBao ;
 - **Terraform** crée le réseau, le cluster Kubernetes (EKS), le load balancer, et installe **ArgoCD** ;
-- **ArgoCD** installe Jitsi, External Secrets et OpenBao depuis ce dépôt (Helm) ;
-- **OpenBao** garde les mots de passe internes de Jitsi, que **External Secrets** recopie dans Kubernetes. Il se déverrouille seul grâce à une clé AWS KMS.
+- **ArgoCD** installe Jitsi, External Secrets, OpenBao et Chaos Mesh depuis ce dépôt (Helm) ;
+- **OpenBao** garde les mots de passe internes de Jitsi, que **External Secrets** recopie dans Kubernetes. Il se déverrouille seul grâce à une clé AWS KMS ;
+- un **stress test** (Malleus, de jitsi-meet-torture) fait entrer chaque jour à 12h de vrais navigateurs dans une réunion (partie 10) ;
+- **Chaos Mesh** injecte des pannes (pod tué, CPU saturé, requêtes coupées) pour voir comment Jitsi s'en remet (partie 11).
 
-Aucune commande manuelle après la mise en place initiale (partie 8).
+Aucune commande manuelle après la mise en place initiale (partie 8), sauf pour lancer les expériences de Chaos Mesh.
 
 ```
 .
 ├── .github/workflows/
 │   ├── deploy.yml                checkov, terraform apply, values-infra, bootstrap OpenBao
-│   └── destroy.yml               terraform destroy + volumes EBS orphelins (lancé à la main)
+│   ├── destroy.yml               terraform destroy + volumes EBS orphelins (lancé à la main)
+│   └── stress.yml                stress test Malleus (chaque jour à 12h, ou à la main)
 ├── scripts/
 │   ├── tfstate.sh                state Terraform ↔ artifact GitHub chiffré
 │   └── bootstrap-openbao.sh      init et configuration d'OpenBao
@@ -21,19 +24,27 @@ Aucune commande manuelle après la mise en place initiale (partie 8).
 │   ├── jitsi-meet.yaml
 │   ├── eso.yaml
 │   ├── secrets.yaml
-│   └── openbao.yaml
+│   ├── openbao.yaml
+│   └── chaos-mesh.yaml
 ├── helm/
+│   ├── values/
+│   │   └── jitsi-meet-aws.yaml   les réglages Jitsi du projet (à la main)
 │   ├── jitsi-meet/               chart Helm jitsi-meet 3.10.0
-│   │   ├── values-aws.yaml       les réglages du projet (à la main)
 │   │   └── values-infra.yaml     l'URL et les IP du NLB (écrit par la CI)
 │   └── eso/
 │       ├── serviceaccount.yaml   l'identité d'ESO auprès d'OpenBao
 │       ├── secret-store.yaml     la connexion à OpenBao
 │       └── external-secrets.yaml secrets OpenBao → Secrets Kubernetes
-└── jitsi-kustomize/              variante Kustomize (ne pas déployer avec Helm)
+├── malleus/                      les deux images du stress test
+│   ├── grid/Dockerfile           Selenium + Chrome + vidéo et son de test
+│   └── malleus/Dockerfile        jitsi-meet-torture (Malleus), commit épinglé
+└── chaos-mesh/                   les expériences de panne (lancées à la main, jamais par ArgoCD)
+    ├── pod-chaos.yaml
+    ├── jvb-cpu-stress.yaml
+    └── http-chaos-abort.yaml
 ```
 
-Le dossier `helm/jitsi-meet/` contient le chart complet, identique au chart officiel 3.10.0 (`values.yaml` compris). Les réglages du projet sont dans `values-aws.yaml`, l'URL et les IP du NLB dans `values-infra.yaml` (partie 5). ArgoCD lit le chart et ces deux fichiers dans ce dépôt, sur GitHub (branche `main`).
+Le dossier `helm/jitsi-meet/` contient le chart complet, identique au chart officiel 3.10.0 (`values.yaml` compris). Les réglages du projet sont rangés à part, dans `helm/values/jitsi-meet-aws.yaml`, pour ne pas les mélanger au chart. L'URL et les IP du NLB sont dans `values-infra.yaml`, que la CI écrit dans le dossier du chart (partie 5). ArgoCD lit le chart et ces deux fichiers dans ce dépôt, sur GitHub (branche `main`).
 
 ---
 
@@ -241,17 +252,21 @@ L'Application ArgoCD de Jitsi lit deux fichiers de values, dans cet ordre (le se
 
 | Fichier | Écrit par | Contenu |
 |---|---|---|
-| `values-aws.yaml` | à la main | les réglages du projet (tableau ci-dessous) |
-| `values-infra.yaml` | la CI, après chaque `terraform apply` | `publicURL`, `jvb.publicIPs`, et une annotation `jitsi/public-url` sur tous les pods |
+| `helm/values/jitsi-meet-aws.yaml` | à la main | les réglages du projet (tableau ci-dessous) |
+| `helm/jitsi-meet/values-infra.yaml` | la CI, après chaque `terraform apply` | `publicURL`, `jvb.publicIPs`, et une annotation `jitsi/public-url` sur tous les pods |
+
+Le premier est hors du dossier du chart : l'Application le désigne par `../values/jitsi-meet-aws.yaml`, relatif au chart. ArgoCD accepte un fichier de values situé ailleurs tant qu'il est dans le même dépôt.
 
 **Pourquoi l'annotation :** le chart range `PUBLIC_URL` dans une ConfigMap commune, et aucun pod ne redémarre quand elle change. Sans rien d'autre, web garderait l'URL de l'ancien NLB. L'annotation change avec l'URL : Kubernetes voit des pods modifiés et les redémarre.
 
-Réglages de `helm/jitsi-meet/values-aws.yaml`, qui remplacent ceux du chart officiel :
+Réglages de `helm/values/jitsi-meet-aws.yaml`, qui remplacent ceux du chart officiel :
 
 | Réglage | Valeur | Pourquoi |
 |---|---|---|
 | `web.service` | `NodePort` 30080 | cible du NLB pour le site |
 | `web.extraEnvs` | `ENABLE_P2P: "false"` | toute la vidéo passe par jvb |
+| `web.extraEnvs` | `ENABLE_PREJOIN_PAGE: "false"` | pas d'écran de pré-connexion : sans ça, le stress test entre sans micro ni caméra (partie 10) |
+| `jicofo.strategy` | `type: Recreate` | jamais deux jicofo en même temps pendant un redéploiement (pièges, partie 8) |
 | `jvb.disableStun` | `true` | inutile, les IP publiques sont déjà connues |
 | `jvb.UDPPort` / `jvb.nodePort` | 30300 | même port partout |
 | `jvb.service` | `NodePort`, `Local` | voir la partie 3 |
@@ -399,7 +414,9 @@ push sur main
 
 Depuis zéro, il faut environ 17 minutes (dont 14 pour `terraform apply`). Sans changement d'infra, environ 2 minutes.
 
-Les changements dans `helm/` ou `argocd/` ne relancent pas la CI : ArgoCD les voit sur GitHub et les applique dans les 3 minutes. Le commit de la CI ne relance pas non plus le workflow : un push fait avec le jeton automatique `GITHUB_TOKEN` ne déclenche aucun workflow.
+**Pour redéployer, utiliser Run workflow, jamais « Re-run jobs ».** Un re-run rejoue le run d'origine sur **son** commit, pas sur le dernier de `main` : Terraform appliquerait l'ancien code, et le commit de `values-infra.yaml` entrerait en conflit avec celui déjà sur `main` (`CONFLICT (content): Merge conflict in helm/jitsi-meet/values-infra.yaml`). Le conflit est un garde-fou : sans lui, le bot pousserait des valeurs calculées par l'ancien code.
+
+Les changements dans `helm/` ou `argocd/` ne relancent pas la CI : ArgoCD relit GitHub toutes les 2 minutes environ et les applique (bouton **Refresh** sur l'app `root` pour ne pas attendre). Le commit de la CI ne relance pas non plus le workflow : un push fait avec le jeton automatique `GITHUB_TOKEN` ne déclenche aucun workflow.
 
 **Ne jamais lancer `terraform apply` depuis un poste** : le state est dans l'artifact, pas sur le poste, et un apply en root créerait une deuxième access entry pour root, ce qu'EKS refuse.
 
@@ -420,11 +437,12 @@ Une **Application** ArgoCD dit : « prends telle source dans Git, et applique-la
 Terraform ──► Application root  (lit argocd/apps/ sur GitHub)
                  ├─► Application eso      → chart external-secrets 2.15.0
                  ├─► Application secrets  → helm/eso/ (ServiceAccount, SecretStore, ExternalSecrets)
-                 ├─► Application openbao  → chart openbao 0.29.6
-                 └─► Application jitsi    → helm/jitsi-meet/ + values-aws.yaml + values-infra.yaml
+                 ├─► Application openbao    → chart openbao 0.29.6
+                 ├─► Application chaos-mesh → chart chaos-mesh 2.8.8 (partie 11)
+                 └─► Application jitsi      → helm/jitsi-meet/ + helm/values/jitsi-meet-aws.yaml + values-infra.yaml
 ```
 
-Ajouter une app, c'est poser un fichier dans `argocd/apps/` ; le supprimer retire l'app. La règle : **un fichier `kind: Application` va dans `argocd/apps/`, les charts et les manifestes restent dans `helm/`.**
+Ajouter une app, c'est poser un fichier dans `argocd/apps/` ; le supprimer retire l'app. La règle : **un fichier `kind: Application` va dans `argocd/apps/`, les charts, les values et les manifestes restent dans `helm/`.** Tout ce qui est ailleurs (`chaos-mesh/`, `malleus/`) n'est jamais appliqué par ArgoCD.
 
 L'app `secrets` a besoin des types `SecretStore` et `ExternalSecret`, qui n'existent qu'une fois ESO installé. Elle réessaie donc sans limite (`retry.limit: -1`) et saute la vérification préalable des types (`SkipDryRunOnMissingResource=true`) : sinon, un sync raté n'est jamais retenté sur le même commit.
 
@@ -447,6 +465,9 @@ kubectl -n argocd port-forward svc/argocd-server 8080:443
 aws ssm get-parameter --region eu-north-1 --name /gestion-conf/openbao/init --with-decryption \
   --query Parameter.Value --output text | jq -r .root_token
 kubectl -n openbao exec -it openbao-0 -- bao login
+
+# Dashboard de Chaos Mesh : http://localhost:2333 (sans jeton)
+kubectl -n chaos-mesh port-forward svc/chaos-dashboard 2333:2333
 ```
 
 Ouvre ensuite l'URL `publicURL` de `helm/jitsi-meet/values-infra.yaml` et accepte l'avertissement de certificat.
@@ -464,14 +485,14 @@ GitHub → Actions → **destroy** → Run workflow, puis taper `destroy` pour c
 | job checkov en échec | la dernière release de `checkov-action` embarque Checkov 2.0 (2022) : Checkov 3 est installé avec `pip` |
 | `cannot pull with rebase: You have unstaged changes` | `terraform init` ajoute les empreintes Linux dans `.terraform.lock.hcl` sur le runner : `git pull --rebase --autostash` |
 | tout recréé au run suivant | sans sauvegarde, le state reste sur le runner et disparaît avec lui : d'où l'artifact |
+| `CONFLICT (content): Merge conflict in helm/jitsi-meet/values-infra.yaml` | « Re-run jobs » sur un ancien run, qui rejoue l'ancien commit : utiliser Run workflow (plus haut) |
+| aucune conférence ne démarre, jicofo `Running` mais 0 bridge, `conflict: Replaced by new connection` dans ses logs | pendant un redéploiement, l'ancien et le nouveau jicofo se sont connectés en même temps à prosody ; celui qui est éjecté ne se reconnecte jamais. Corrigé par `jicofo.strategy: Recreate`. Dépannage : `kubectl -n jitsi delete pod -l app.kubernetes.io/component=jicofo` |
 
 **Débugger une connexion OIDC refusée :** le log GitHub dit seulement « Not authorized ». Le détail est dans CloudTrail (région `eu-north-1`, Event history, événement `AssumeRoleWithWebIdentity`) : `userIdentity.userName` montre le `sub` exact présenté par GitHub, à comparer avec la condition du rôle. CloudTrail met 5 à 15 minutes à afficher un événement.
 
 **Checkov** tourne en mode rapport (`--soft-fail`) : il affiche ses alertes sans bloquer le déploiement. Il en reste 7, acceptées pour ce projet : le port 80 ouvert, pas de logs d'accès du NLB, pas de policy KMS écrite à la main, et des modules épinglés par numéro de version plutôt que par commit. Pour le rendre bloquant, retirer `--soft-fail` dans `deploy.yml`.
 
 **Modifier un disque de prosody** (`prosody.persistence`) : Kubernetes interdit de changer les disques d'un StatefulSet existant, et la sync ArgoCD échoue (`Forbidden: updates to statefulset spec`). Il faut supprimer le StatefulSet, qu'ArgoCD recrée : `kubectl -n jitsi delete sts jitsi-jitsi-meet-prosody`. De même, OpenBao est en `updateStrategy: OnDelete` : après un changement de sa config, il faut supprimer le pod `openbao-0` pour qu'elle soit prise en compte.
-
-Ne déploie pas Kustomize et Helm en même temps : les deux utilisent le namespace `jitsi` et les mêmes NodePorts.
 
 ---
 
@@ -491,6 +512,9 @@ Ce n'est pas de la haute disponibilité. Pour monter en charge, on ajoute des jv
 ### Autres limites
 
 - **Pas de haute disponibilité réelle** : un seul jvb et une seule passerelle NAT.
+- **prosody, point de défaillance unique** : il ne se met pas en cluster, toute la signalisation passe par lui, et son disque EBS l'attache à une seule AZ (son pod ne peut revenir que sur le nœud de cette AZ).
+- **Limites mémoire plus grandes que les nœuds** : le chart donne 4 Gi à jvb et jicofo, alors qu'un nœud n'en a qu'environ 3,1 allouables. La limite ne protège rien : c'est le nœud entier qui manque de mémoire avant.
+- **Pas d'écran de pré-connexion** : désactivé pour le stress test (partie 10), les utilisateurs entrent directement avec micro et caméra.
 - **Certificat autosigné** : avertissement dans le navigateur. Avec un nom de domaine, on utiliserait un certificat ACM validé.
 - **State dans un artifact** : pas d'historique, et pas de verrou en dehors du groupe `concurrency` des workflows ; les artifacts expirent au bout de 7 jours. Suffisant pour un projet détruit après la démo ; pour durer, on passerait à un backend S3.
 - **OpenBao figé en 2.6** : pour passer en 2.7, il faudrait installer le plugin KMS AWS et le déclarer dans la config.
@@ -498,3 +522,117 @@ Ce n'est pas de la haute disponibilité. Pour monter en charge, on ajoute des jv
 - **Nœuds** : des `c7i-flex.large` (2 vCPU, 4 Go, éligibles au free tier) suffisent pour une démo. Un `t3.small` n'accepte que 11 pods par nœud (une IP du VPC par pod), trop peu pour ArgoCD, ESO, OpenBao et Jitsi ; un `large` en accepte 29.
 - **Changer un mot de passe interne** : ESO met à jour le Secret dans l'heure (ou tout de suite avec `force-sync`), mais les pods ne lisent leurs variables qu'au démarrage. Il faut redémarrer prosody, jicofo et jvb.
 - **Pas d'authentification** : n'importe qui ayant l'URL peut créer une salle. Pour en remettre une, `enableAuth: true` avec des comptes prosody, ou l'auth par **JWT** : sa clé de signature (`JWT_APP_SECRET`) irait dans OpenBao par le même chemin ESO (`prosody.jwt.existingSecretName`), mais il faudrait un outil pour fabriquer les tokens des utilisateurs.
+
+---
+
+## 10. Le stress test : Malleus
+
+Malleus est l'outil de test de charge de [jitsi-meet-torture](https://github.com/jitsi/jitsi-meet-torture), le projet de tests de Jitsi. Il pilote de vrais navigateurs Chrome (Selenium) qui rejoignent une salle et envoient une vidéo et un son de test.
+
+### Les deux images
+
+| Image | Dossier | Contenu |
+|---|---|---|
+| `grid` | `malleus/grid/` | `selenium/standalone-chrome` (tag épinglé) + la vidéo `FourPeople_1280x720_30.y4m` et le son `fakeAudioStream.wav` dans `/usr/share/jitsi-meet-torture/resources` |
+| `malleus` | `malleus/malleus/` | Maven + Java 11 (la version de la CI de torture) et jitsi-meet-torture au commit `4c00915`, compilé au build |
+
+Les fichiers de test sont dans l'image **grid**, pas dans malleus : c'est Chrome, sur le grid, qui les lit. `malleus.sh` passe `-Dremote.resource.path=/usr/share/jitsi-meet-torture`, d'où ce chemin.
+
+### Le workflow `.github/workflows/stress.yml`
+
+Lancé chaque jour à 12h, heure de Paris (`timezone: Europe/Paris`), ou à la main (Actions → stress → Run workflow). Il n'a besoin d'aucun accès à AWS.
+
+1. Lit `publicURL` dans `helm/jitsi-meet/values-infra.yaml` et vérifie que Jitsi répond. Après un `destroy`, le fichier garde l'ancienne URL : le job échoue tout de suite, en rouge.
+2. Construit les deux images sur le runner (environ 2 minutes).
+3. Démarre le grid sous le nom `selenium-grid`, avec 5 sessions Chrome (`SE_NODE_MAX_SESSIONS=5`) et un `/dev/shm` agrandi, sans quoi Chrome plante dans Docker.
+4. Lance Malleus : une conférence `bench0`, 5 participants qui envoient tous audio et vidéo, pendant 5 minutes.
+
+```bash
+docker run --rm --network stress malleus \
+  --conferences=1 --participants=5 --senders=5 --audio-senders=5 \
+  --duration=300 --room-name-prefix=bench \
+  --hub-url=http://selenium-grid:4444/wd/hub \
+  --instance-url="$JITSI_URL" --allow-insecure-certs=true --headless
+```
+
+- **Toujours la forme `--option=valeur`** : avec des arguments positionnels, `malleus.sh` force l'URL `https://meet.jit.si`, le Jitsi public. Sans `--instance-url`, l'image vise une adresse invalide et échoue (garde-fou dans le Dockerfile).
+- `--allow-insecure-certs=true` : le certificat du NLB est autosigné.
+- Un seul run à la fois (`concurrency: stress`) : deux runs rejoindraient la même salle.
+
+### Ce que mesure un run
+
+Un run vert veut dire que les 5 participants sont restés dans la conférence pendant 5 minutes. **Il ne vérifie pas que la vidéo passe.** Pour ça, il faut lire les statistiques du jvb pendant le run :
+
+```bash
+kubectl -n jitsi exec deploy/jitsi-jitsi-meet-jvb-0 -- curl -s localhost:8080/colibri/stats \
+  | jq '{conferences, participants, endpoints_sending_video, bit_rate_download, bit_rate_upload, stress_level}'
+```
+
+Run du 18 novembre 2026 : 5 participants sur 5 envoient de la vidéo, le jvb reçoit 1,9 Mbit/s et en redistribue 4,5, avec un `stress_level` de 0,10 au maximum. Jitsi est loin de sa limite.
+
+### Pièges rencontrés
+
+| Problème | Cause |
+|---|---|
+| les participants entrent sans micro ni caméra, le jvb ne reçoit rien | torture ajoute `config.prejoinConfig.enabled=false` à ses URL, et Jitsi traite ce paramètre comme « entrer sans média » (`disableInitialGUM`), sauf dans une iframe. L'écran de pré-connexion est donc désactivé côté serveur (`ENABLE_PREJOIN_PAGE`), et le Dockerfile retire ce paramètre de torture (`sed`) |
+| à 10 participants : pages rechargées, `APP is not defined`, vidéo en 180p | c'est le runner (4 vCPU) qui sature, pas Jitsi : le jvb ne dépassait pas 0,17 de `stress_level`. D'où 5 participants |
+| Chrome du grid très lent sur un Mac Apple Silicon | `selenium/standalone-chrome` n'existe qu'en amd64 : en local, il tourne en émulation. Les runners GitHub sont en amd64 |
+
+---
+
+## 11. Chaos Mesh : injecter des pannes
+
+Chaos Mesh (chart 2.8.8) est installé par ArgoCD (`argocd/apps/chaos-mesh.yaml`) dans le namespace `chaos-mesh` : un contrôleur, un `chaos-daemon` par nœud (c'est lui qui agit dans les conteneurs) et un dashboard.
+
+| Réglage | Pourquoi |
+|---|---|
+| `chaosDaemon.runtime: containerd`, `chaosDaemon.socketPath: /run/containerd/containerd.sock` | les nœuds EKS tournent sous containerd ; le chart suppose Docker par défaut |
+| `dashboard.securityMode: "false"` | pas de jeton pour le dashboard. Entre guillemets : dans une Application, la valeur d'un paramètre Helm doit être une chaîne, sinon Kubernetes refuse l'Application |
+| `ServerSideApply=true` | trois CRDs (`workflownodes`, `schedules`, `workflows`) dépassent les 256 Ko qu'accepte l'apply classique d'ArgoCD |
+| `ignoreDifferences` + `RespectIgnoreDifferences=true` | les certificats générés par le chart, ci-dessous |
+
+### Les certificats générés au rendu
+
+Le chart fabrique ses certificats (webhooks, mTLS entre le contrôleur et les daemons) et une annotation `rollme` **au hasard, à chaque rendu** (`genCA`, `randAlphaNum`). C'est prévu pour `helm install`, qui ne rend qu'une fois. ArgoCD, lui, refait le rendu (à l'expiration de son cache de 24 h, à un hard refresh, à une modification de l'app) : à chaque fois, de nouveaux certificats et un redémarrage du contrôleur et des daemons.
+
+À l'installation, ArgoCD a synchronisé 4 fois de suite et mélangé plusieurs rendus : le contrôleur et les daemons n'avaient plus la même CA (`x509: certificate signed by unknown authority`). Aucune expérience qui passe par le daemon (CPU, réseau, HTTP, disque) n'était injectée ; seul `pod-kill`, qui passe par l'API Kubernetes, marchait.
+
+`ignoreDifferences` (l'annotation `rollme`, les 4 Secrets de certificats, les `caBundle` des webhooks) et `RespectIgnoreDifferences=true` font garder à ArgoCD ce qui est déjà dans le cluster.
+
+**Si ça recommence** (expérience `Not Injected`, erreur x509 dans `kubectl -n jitsi get stresschaos <nom> -o yaml`), remettre les certificats en cohérence :
+
+```bash
+kubectl -n chaos-mesh delete secret chaos-mesh-webhook-certs chaos-mesh-daemon-certs \
+  chaos-mesh-daemon-client-certs chaos-mesh-chaosd-client-certs
+kubectl delete mutatingwebhookconfiguration chaos-mesh-mutation
+kubectl delete validatingwebhookconfiguration chaos-mesh-validation chaos-mesh-validation-auth
+# ArgoCD les recrée à partir d'un seul rendu ; les pods rechargent ensuite les certificats :
+kubectl -n chaos-mesh delete pod -l app.kubernetes.io/component=controller-manager
+kubectl -n chaos-mesh delete pod -l app.kubernetes.io/component=chaos-daemon
+```
+
+Supprimer les pods plutôt que faire un `rollout restart` : l'annotation que ce dernier ajoute au Deployment serait vue comme une différence et annulée par ArgoCD. Sur chaque nouveau cluster, vérifier avec un StressChaos de 20 s. La solution définitive serait cert-manager (`webhook.certManager.enabled`), qui produit les certificats une seule fois.
+
+### Les expériences : `chaos-mesh/`
+
+Ce dossier est en dehors de `argocd/apps/` : ArgoCD n'y touche jamais, et une expérience ne tourne que quand on la lance. De préférence pendant un run du stress test :
+
+```bash
+kubectl apply -f chaos-mesh/jvb-cpu-stress.yaml
+kubectl -n jitsi get stresschaos                     # injectée ? terminée ?
+kubectl delete -f chaos-mesh/jvb-cpu-stress.yaml     # obligatoire avant de la relancer
+```
+
+| Fichier | Ce qu'il fait | Effet |
+|---|---|---|
+| `pod-chaos.yaml` | `pod-failure` du jvb pendant 30 s : le conteneur ne répond plus, sans être supprimé | attendu : vidéo coupée 30 s, réunions conservées |
+| `jvb-cpu-stress.yaml` | 2 workers à 100 % dans le pod jvb pendant 2 min | mesuré sur 20 s : le nœud du jvb à 1 886 millicores sur 2 000 |
+| `http-chaos-abort.yaml` | coupe les requêtes `/http-bind` du pod web (port 8000) pendant 20 s | attendu : le site s'affiche, mais personne ne peut entrer en réunion. Pas encore testé |
+
+Le `pod-kill` du jvb, fait depuis le dashboard, a montré la reprise : le nouveau pod jvb est enregistré auprès de jicofo 3 s après, et jicofo y réinvite les participants. Personne n'est éjecté, car la réunion vit dans prosody. Seul dans une salle, on ne remarque rien : jicofo n'utilise un jvb qu'à partir de 2 participants.
+
+| Pod visé | Ce qui tombe | Ce qui continue |
+|---|---|---|
+| web | le site, les nouvelles entrées, puis la signalisation (`/http-bind` passe par web) | le média des réunions en cours |
+| jvb | le média, quelques secondes | les salles, la signalisation |
+| prosody | tout : c'est le point de défaillance unique | rien |
