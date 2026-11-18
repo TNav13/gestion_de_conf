@@ -1,10 +1,10 @@
 name: stress
 
 # Test de charge Malleus (jitsi-meet-torture) contre le Jitsi déployé
-on:
-  schedule:
-    - cron: "0 12 * * *"
-      timezone: Europe/Paris
+# on:
+#  schedule:
+#   - cron: "0 12 * * *"
+#     timezone: Europe/Paris
   workflow_dispatch:
 
 # Deux runs en même temps rejoindraient la même salle (même préfixe de nom)
