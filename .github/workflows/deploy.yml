@@ -69,11 +69,16 @@ jobs:
           TF_STATE_PASSPHRASE: ${{ secrets.TF_STATE_PASSPHRASE }}
         run: ./scripts/tfstate.sh pull
 
-      - name: Terraform apply
+      - name: Terraform plan
         working-directory: terraform_infra
         run: |
           terraform init -input=false
-          terraform apply -input=false -auto-approve
+          terraform plan -input=false -out=deploy.tfplan
+
+      # Applique exactement le plan affiché ci-dessus, sans le recalculer
+      - name: Terraform apply
+        working-directory: terraform_infra
+        run: terraform apply -input=false deploy.tfplan
 
       # Même si l'apply échoue : ce qui a déjà été créé doit rester connu du state.
       # Jamais si la récupération a échoué, pour ne pas écraser le bon state
