@@ -46,11 +46,12 @@ jobs:
         run: ./scripts/tfstate.sh pull
 
       - name: Terraform destroy
+        id: destroy
         working-directory: terraform_infra
         run: |
           terraform init -input=false
           # Noté avant le destroy : sert ensuite à retrouver les volumes du cluster
-          echo "CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || true)" >> "$GITHUB_ENV"
+          echo "cluster_name=$(terraform output -raw cluster_name 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
           terraform destroy -input=false -auto-approve
 
       # State vidé (ou partiel si le destroy échoue) : le prochain deploy repart de là
@@ -73,12 +74,16 @@ jobs:
       # Les disques des PVC (openbao, prosody) sont créés par Kubernetes, pas par
       # Terraform : ils survivent au cluster et restent facturés
       - name: Suppression des volumes EBS orphelins
-        if: env.CLUSTER_NAME != ''
+        if: steps.destroy.outputs.cluster_name != ''
+        env:
+          CLUSTER_NAME: ${{ steps.destroy.outputs.cluster_name }}
         run: |
           ids=$(aws ec2 describe-volumes \
-            --filters "Name=tag:ebs.csi.aws.com/cluster-name,Values=$CLUSTER_NAME" Name=status,Values=available \
+            --filters "Name=tag:ebs.csi.aws.com/cluster-name,Values=$CLUSTER_NAME" \
             --query 'Volumes[].VolumeId' --output text)
           for id in $ids; do
+            # Un disque peut finir de se détacher juste après la fin du destroy
+            aws ec2 wait volume-available --volume-ids "$id"
             echo "suppression de $id"
             aws ec2 delete-volume --volume-id "$id"
           done
