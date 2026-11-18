@@ -1,0 +1,51 @@
+# Réglages Jitsi pour GKE. L'URL, les IP et le certificat viennent de gcp/terraform/jitsi.
+enableAuth: false
+enableGuests: false
+prosody:
+  persistence:
+    enabled: true
+    storageClassName: standard-rwo
+
+web:
+  # Le HTTPS est terminé par le load balancer de l'Ingress, comme par le NLB sur AWS :
+  # le chart force DISABLE_HTTPS et nginx reste en HTTP sur 8000
+  service:
+    annotations:
+      # NEG : le load balancer vise directement les pods, sans passer par un NodePort
+      cloud.google.com/neg: '{"ingress": true}'
+      cloud.google.com/backend-config: '{"default": "jitsi-web"}'
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: gce
+      kubernetes.io/ingress.allow-http: "false"
+    # Pas de nom de domaine : la règle vaut pour tous les hôtes
+    hosts:
+      - host: ""
+        paths:
+          - "/"
+  extraEnvs:
+    ENABLE_P2P: "false"
+    # Torture (stress test) passe config.prejoinConfig.enabled=false dans l'URL, ce que
+    # Jitsi traite comme « entrer sans média ». Sans page de pré-connexion, plus besoin de ce paramètre
+    ENABLE_PREJOIN_PAGE: "false"
+
+jvb:
+  disableStun: true
+  # Le load balancer garde le port : jvb annonce IP:10000 et le Service écoute sur 10000
+  UDPPort: 10000
+  service:
+    type: LoadBalancer
+    # Seul le nœud qui porte jvb répond au health check du load balancer, et jvb
+    # voit la vraie adresse du navigateur
+    externalTrafficPolicy: Local
+  xmpp:
+    existingSecretName: jitsi-jvb-bao
+
+jicofo:
+  # Deux jicofo en même temps se volent la session XMPP « focus » : celui éjecté ne
+  # se reconnecte jamais et plus aucune conférence ne démarre
+  strategy:
+    type: Recreate
+  xmpp:
+    existingSecretName: jitsi-jicofo-bao

@@ -1,0 +1,9 @@
+# Réglages du load balancer de l'Ingress pour le Service web (annotation backend-config)
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: jitsi-web
+spec:
+  # BOSH (/http-bind) garde une requête ouverte jusqu'à 60 s, et les websockets
+  # (/colibri-ws, /xmpp-websocket) toute la réunion : les 30 s par défaut les couperaient
+  timeoutSec: 3600
