@@ -1,9 +1,9 @@
 "global":
   "podAnnotations":
-    "jitsi/public-url": "https://jitsi-nlb-cc696863ff60461b.elb.eu-north-1.amazonaws.com"
+    "jitsi/public-url": "https://jitsi-nlb-cecb4722cfcabb27.elb.eu-north-1.amazonaws.com"
 "jvb":
   "publicIPs":
-  - "13.50.215.80"
-  - "13.53.97.36"
-  - "13.62.216.105"
-"publicURL": "https://jitsi-nlb-cc696863ff60461b.elb.eu-north-1.amazonaws.com"
+  - "13.49.8.102"
+  - "13.63.113.111"
+  - "13.63.18.223"
+"publicURL": "https://jitsi-nlb-cecb4722cfcabb27.elb.eu-north-1.amazonaws.com"
