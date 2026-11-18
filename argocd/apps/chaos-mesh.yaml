@@ -24,6 +24,40 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+      - RespectIgnoreDifferences=true
     automated:
       prune: true
       selfHeal: true
+  # Le chart tire des certificats et une annotation au hasard à chaque rendu : on garde ceux du cluster
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: chaos-controller-manager
+      jsonPointers:
+        - /spec/template/metadata/annotations/rollme
+    - group: apps
+      kind: DaemonSet
+      name: chaos-daemon
+      jsonPointers:
+        - /spec/template/metadata/annotations/rollme
+    - kind: Secret
+      name: chaos-mesh-webhook-certs
+      jsonPointers: [/data]
+    - kind: Secret
+      name: chaos-mesh-daemon-certs
+      jsonPointers: [/data]
+    - kind: Secret
+      name: chaos-mesh-daemon-client-certs
+      jsonPointers: [/data]
+    - kind: Secret
+      name: chaos-mesh-chaosd-client-certs
+      jsonPointers: [/data]
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      name: chaos-mesh-mutation
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
