@@ -7,8 +7,8 @@ spec:
   selector:
     namespaces:
       - jitsi
+    # Une seule valeur par clé : labelSelectors est un ET, un pod n'est pas web et jvb à la fois
     labelSelectors:
-      app.kubernetes.io/component: web
       app.kubernetes.io/component: jvb
   mode: all
   action: pod-failure

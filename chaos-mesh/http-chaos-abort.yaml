@@ -13,6 +13,6 @@ spec:
   target: Request
   abort: true
   port: 8000
+  # Toutes méthodes : la signalisation (BOSH) passe par des POST
   path: /http-bind
-  method: GET
   duration: 20s
